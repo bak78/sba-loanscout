@@ -1,0 +1,139 @@
+# Which SBA businesses count as leads, and how SBA and Google facts score.
+# Edit and re-run — no code change needed.
+#
+# Source: the SBA's Small Business Search (search.certifications.sba.gov), the
+# federal directory of small businesses registered to sell to the government.
+# Each business chose to show its contact person, email and phone in public.
+
+# Default area, shown first in the window. "ALL" means the whole country.
+state: MD
+zip_prefixes: []
+
+# Businesses looked up on Google per run, best-ranked first. Each costs about
+# one Serper credit. The next run continues down the list.
+default_limit: 500
+
+# Industries, in the window's three columns. Each heading is a group; each
+# line under it is one checkbox. "naics" lists industry codes or the start of
+# them ("6211" = every code starting 6211). A business counts when its MAIN
+# industry code is in a ticked line, so consultants and suppliers that only
+# list a code among many others are left out. A business whose code fits two
+# lines belongs to the first.
+groups:
+  - name: Healthcare
+    fields:
+      - name: Home care
+        naics: ["6216", "624120"]
+      - name: Doctors' offices
+        naics: ["6211", "62131", "62132", "62139"]
+      - name: Dental
+        naics: ["6212"]
+      - name: Behavioral health
+        naics: ["62133", "62142", "6232"]
+      - name: Therapy (PT, OT, speech)
+        naics: ["62134"]
+      - name: Nursing & assisted living
+        naics: ["6231", "6233"]
+      - name: Clinics & labs
+        naics: ["62141", "62149", "6215", "6219"]
+      - name: Pharmacy
+        naics: ["446110", "456110"]
+  - name: Construction
+    fields:
+      - name: General contractors
+        naics: ["236", "238120", "238130", "238150", "238170", "238190", "238290", "238990",
+                "237120", "237210"]
+      - name: Roofing
+        naics: ["238160"]
+      - name: Paving & concrete
+        naics: ["237310", "238110", "238140"]
+      - name: Electrical
+        naics: ["238210"]
+      - name: Plumbing & HVAC
+        naics: ["238220"]
+      - name: Landscaping
+        naics: ["561730"]
+      - name: Excavation & site work
+        naics: ["238910", "237110", "237130", "237990"]
+      - name: Painting & finishing
+        naics: ["238310", "238320", "238330", "238340", "238350", "238390"]
+  - name: Other fields
+    fields:
+      - name: Trucking & transport
+        naics: ["484", "4885", "4921", "4922", "4853", "4854", "4859"]
+      - name: Restaurants & food
+        naics: ["7225", "7223", "311811"]
+      - name: Cleaning & janitorial
+        naics: ["56172", "56174", "56179"]
+      - name: Auto repair
+        naics: ["8111"]
+      - name: Child care
+        naics: ["624410"]
+      - name: Retail shops
+        naics: ["44", "45"]
+      - name: Manufacturing
+        naics: ["31", "32", "33"]
+      - name: Professional services
+        naics: ["5411", "5412", "5413", "5414", "5415", "5416", "5418", "5419"]
+
+# Ticked when the window opens: group names (every industry under them) or
+# single industries. Put a name containing a comma in quotes.
+default_fields: [Healthcare]
+
+# Chains and groups: at the end of every run, a website or email domain shared
+# by this many different businesses in the results moves them to
+# <results>_left_out.csv. 0 turns this off.
+chain_min_companies: 3
+
+# Franchise brands: each office is independently owned — a small business —
+# though all share the brand's domain. Never treated as a chain.
+franchise_domains: [
+  visitingangels.com, synergyhomecare.com, amadaseniorcare.com, comfortkeepers.com,
+  homeinstead.com, rightathome.net, brightstarcare.com, seniorhelpers.com, griswoldcare.com,
+  griswoldhomecare.com, homewatchcaregivers.com, firstlighthomecare.com, alwaysbestcare.com,
+  assistinghands.com, homehelpershomecare.com, interimhealthcare.com, nursenextdoor.com,
+  caringseniorservice.com, thejoint.com, 100percentchiropractic.com,
+  servpro.com, pauldavis.com, mrrooter.com, mrelectric.com, onehourheatandair.com,
+  benjaminfranklinplumbing.com, aireserv.com, glassdoctor.com, mrhandyman.com, certapro.com,
+  fivestarpainting.com, bathfitter.com, rebath.com, restoration1.com, puroclean.com,
+  rainbowrestores.com, 1800gotjunk.com, collegehunkshaulingjunk.com, junk-king.com,
+  lawndoctor.com, weedman.com, groundsguys.com, precisiondoor.net, budgetblinds.com,
+]
+
+# National chains and large companies: a website or email on one of these
+# domains means the business is left out (to <results>_left_out.csv).
+national_chains: [
+  cvs.com, walgreens.com, riteaid.com, walmart.com, samsclub.com, costco.com, target.com,
+  kroger.com, stopandshop.com, giantfood.com, gianteagle.com, weismarkets.com, safeway.com,
+  shoprite.com, wegmans.com, publix.com, harristeeter.com, foodlion.com, hannaford.com,
+  lincare.com, apria.com, adapthealth.com, rotech.com, aveanna.com, accentcare.com,
+  amedisys.com, centerwell.com, lhcgroup.com, bayada.com, maximhealthcare.com,
+  brightspringhealth.com, encompasshealth.com, gentiva.com,
+  concentra.com, medexpress.com, patientfirst.com, citymd.com, novacare.com, selectmedical.com,
+  athletico.com, atipt.com, ivyrehab.com, upstreamrehab.com, benchmarkpt.com,
+  aspendental.com, myeyedr.com, lenscrafters.com, visionworks.com, americasbest.com,
+  questdiagnostics.com, labcorp.com, davita.com, fmcna.com, freseniuskidneycare.com,
+  genesiscare.com, frederick.health,
+  uhaul.com, theupsstore.com, homedepot.com, lowes.com, 84lumber.com, bldr.com,
+  buildersfirstsource.com, abcsupply.com, ferguson.com, beaconroofingsupply.com, becn.com,
+  srsdistribution.com, gms.com, unitedrentals.com, sunbeltrentals.com, hercrentals.com, wm.com,
+  republicservices.com, wasteconnections.com, casella.com, vulcanmaterials.com,
+  martinmarietta.com, oldcastle.com, crh.com, cemex.com, heidelbergmaterials.us,
+  lehighhanson.com, installedbuildingproducts.com, topbuild.com, trugreen.com, brightview.com,
+  terminix.com, orkin.com, comcast.com, verizon.com, att.com, quantaservices.com, mastec.com,
+  dycomind.com, emcorgroup.com, comfortsystemsusa.com,
+]
+
+# Score weights for SBA and Google facts. They join the website signals in
+# signals.yaml as "fit", so every point stays traceable to evidence.
+weights:
+  sba_registered: 8          # registered with the SBA, contact shown in public
+  established: 10            # in business at least established_years
+  established_years: 3
+  contacts_own_email: 8      # the email carries the contact person's name
+  company_domain: 4          # the email is on the business's own domain
+  sba_certified: 6           # 8(a), women-owned, HUBZone or veteran-owned certification
+  google_listing: 10         # a Google listing confirmed as this business
+  reviews_many: 14           # 50+ Google ratings: a busy, established business
+  reviews_some: 7            # 10-49 Google ratings
+  good_rating: 5             # 4.0 stars or better, from at least 10 ratings

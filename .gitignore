@@ -1,0 +1,10 @@
+.venv/
+.env
+out/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+# any variant of the key file, e.g. a .env.txt saved by Notepad
+.env.*
+!.env.example

@@ -1,0 +1,476 @@
+# LoanScout scoring rules.
+#
+# Everything about WHAT makes a lead good lives here, not in the Python.
+# Tune weights, add patterns, and re-run — no code change needed.
+#
+# Each signal:
+#   id         unique key, appears in the CSV's top_signals column
+#   category   growth | distress | fit | disqualify
+#   weight     contribution to that category's raw score
+#   patterns   regex, matched case-insensitively against page text
+#   page_bonus multiplier when the hit lands on a given page type
+#
+# Scoring counts DISTINCT signal ids, not occurrences: a job board repeating
+# "now hiring" forty times contributes hiring_active's weight exactly once.
+
+scoring:
+  # Category weights in the final total. Must be the four below; they are
+  # normalized at load time, so they need not sum to 1.0 exactly.
+  weights:
+    fit: 0.40
+    growth: 0.35
+    distress: 0.25
+
+  # Saturation constant per category: score = 100 * raw / (raw + k).
+  # Lower k => easier to reach a high score. Roughly, raw == k scores 50.
+  saturation:
+    growth: 25
+    distress: 20
+    fit: 30
+
+  # Skip a match if one of these appears within this many characters before it.
+  negation_window: 40
+  negation_patterns:
+    - "not"
+    - "no longer"
+    - "never"
+    - "isn't"
+    - "aren't"
+    - "won't"
+    - "we don't"
+
+  # A page yielding less text than this is flagged thin_content (likely a
+  # JS-rendered SPA this crawler cannot read).
+  thin_content_chars: 200
+
+# Page-type classification by URL substring. First match wins; used for
+# crawl prioritization and for page_bonus lookups.
+page_types:
+  careers: ["/career", "/job", "/hiring", "/join-us", "/work-with-us", "/employment"]
+  about: ["/about", "/our-story", "/history", "/who-we-are", "/team", "/staff"]
+  news: ["/news", "/blog", "/press", "/updates", "/announcement"]
+  contact: ["/contact", "/location", "/find-us", "/hours", "/visit"]
+  services: ["/service", "/product", "/shop", "/menu", "/pricing", "/store"]
+
+# Crawl order preference. Earlier buckets are fetched first within the
+# per-site page budget; the homepage is always included.
+crawl_priority: ["careers", "news", "about", "contact", "services"]
+
+# Domains never worth crawling as leads: platforms, directories, aggregators.
+# Matched against the registered domain.
+domain_blocklist:
+  - facebook.com
+  - instagram.com
+  - twitter.com
+  - x.com
+  - linkedin.com
+  - youtube.com
+  - tiktok.com
+  - pinterest.com
+  - yelp.com
+  - yellowpages.com
+  - bbb.org
+  - tripadvisor.com
+  - indeed.com
+  - glassdoor.com
+  - ziprecruiter.com
+  - mapquest.com
+  - foursquare.com
+  - angi.com
+  - thumbtack.com
+  - houzz.com
+  - opentable.com
+  - doordash.com
+  - grubhub.com
+  - ubereats.com
+  - amazon.com
+  - ebay.com
+  - etsy.com
+  - wikipedia.org
+  - reddit.com
+  - crunchbase.com
+  - zoominfo.com
+  - dnb.com
+  - manta.com
+  - chamberofcommerce.com
+
+# TLDs that are never small-business leads.
+tld_blocklist: [gov, edu, mil]
+
+signals:
+
+  # ---------------------------------------------------------------------
+  # GROWTH — expanding businesses that need capital to fund the expansion.
+  # ---------------------------------------------------------------------
+
+  - id: hiring_active
+    category: growth
+    weight: 12
+    patterns:
+      - "now hiring"
+      - "we(?:'| a)re hiring"
+      - "join our team"
+      - "open positions"
+      - "current openings"
+      - "apply today"
+      - "help wanted"
+    page_bonus: {careers: 1.5}
+
+  - id: hiring_volume
+    category: growth
+    weight: 8
+    patterns:
+      - "multiple positions"
+      - "several openings"
+      - "hiring for (?:all|multiple)"
+      - "expanding our team"
+      - "growing our team"
+    page_bonus: {careers: 1.5}
+
+  - id: new_location
+    category: growth
+    weight: 18
+    patterns:
+      - "new location"
+      - "second location"
+      - "third location"
+      - "another location"
+      - "now open in"
+      - "newly opened"
+      - "grand opening"
+      - "opening soon"
+      - "coming soon to"
+
+  - id: expansion_language
+    category: growth
+    weight: 15
+    patterns:
+      - "we(?:'| a)re expanding"
+      - "expanding to"
+      - "expansion"
+      - "scaling up"
+      - "growing fast"
+      - "rapid growth"
+      - "record year"
+      - "busiest (?:year|season) (?:yet|ever)"
+
+  - id: capacity_strain
+    category: growth
+    weight: 14
+    patterns:
+      - "booked (?:out|solid)"
+      - "waitlist"
+      - "wait list"
+      - "currently at capacity"
+      - "high demand"
+      - "backlog"
+      - "lead time of"
+
+  - id: new_equipment
+    category: growth
+    weight: 10
+    patterns:
+      - "new equipment"
+      - "new truck"
+      - "new fleet"
+      - "fleet of"
+      - "invested in (?:new|our)"
+      - "state.of.the.art (?:equipment|facility)"
+      - "upgraded our"
+
+  - id: hiring_clinical
+    category: growth
+    weight: 12
+    patterns:
+      - "caregivers? (?:wanted|needed)"
+      - "now hiring (?:caregivers|nurses|aides|hhas?|cnas?|rns?|lpns?|therapists|hygienists)"
+      - "hiring (?:caregivers|nurses|home health aides|cnas?|rns?|lpns?|therapists|hygienists)"
+      - "join our (?:caregiving|nursing|clinical) team"
+      - "sign.on bonus"
+    page_bonus: {careers: 1.5}
+
+  # Contractors hire crews and drivers when work outgrows them.
+  - id: hiring_trades
+    category: growth
+    weight: 12
+    patterns:
+      - "now hiring (?:laborers|operators|equipment operators|cdl drivers|drivers|foremen|carpenters|electricians|plumbers|roofers|masons|helpers)"
+      - "cdl(?: class a| a)? drivers? (?:wanted|needed)"
+      - "seeking (?:experienced )?(?:laborers|operators|foremen|crew members)"
+      - "join our crew"
+    page_bonus: {careers: 1.5}
+
+  - id: accepting_new
+    category: growth
+    weight: 10
+    patterns:
+      - "accepting new (?:patients|clients)"
+      - "now accepting (?:new )?(?:patients|clients|referrals)"
+      - "same.day appointments"
+
+  - id: service_area_growth
+    category: growth
+    weight: 12
+    patterns:
+      - "now serving"
+      - "expanded (?:our )?services to"
+      - "new (?:office|clinic|practice) in"
+      - "additional (?:office|clinic)"
+
+  - id: franchise_growth
+    category: growth
+    weight: 12
+    patterns:
+      - "franchise opportunit"
+      - "become a franchisee"
+      - "own a franchise"
+      - "new franchisee"
+
+  - id: renovation
+    category: growth
+    weight: 10
+    patterns:
+      - "under renovation"
+      - "remodeling"
+      - "newly renovated"
+      - "build.out"
+      - "new facility"
+      - "moving to a (?:new|larger)"
+
+  # ---------------------------------------------------------------------
+  # DISTRESS — businesses that may need capital to survive.
+  # ---------------------------------------------------------------------
+
+  - id: closing_business
+    category: distress
+    weight: 20
+    patterns:
+      - "going out of business"
+      - "closing (?:our )?doors"
+      - "final days"
+      - "last day of business"
+      - "permanently clos"
+      - "ceasing operations"
+
+  - id: liquidation
+    category: distress
+    weight: 18
+    patterns:
+      - "liquidation"
+      - "everything must go"
+      - "closing sale"
+      - "clearance sale"
+      - "inventory reduction"
+
+  - id: public_appeal
+    category: distress
+    weight: 16
+    patterns:
+      - "gofundme"
+      - "help us stay open"
+      - "support local"
+      - "save our"
+      - "we need your help"
+      - "donate to help"
+
+  - id: reduced_operations
+    category: distress
+    weight: 12
+    patterns:
+      - "reduced hours"
+      - "limited hours"
+      - "temporarily closed"
+      - "closed until further notice"
+      - "short.staffed"
+      - "understaffed"
+      - "please be patient"
+
+  - id: supply_trouble
+    category: distress
+    weight: 10
+    patterns:
+      - "supply chain"
+      - "out of stock"
+      - "shortage"
+      - "price increase"
+      - "rising costs"
+      - "due to inflation"
+
+  # ---------------------------------------------------------------------
+  # FIT — firmographics of a plausible small-business borrower.
+  # ---------------------------------------------------------------------
+
+  - id: established_business
+    category: fit
+    weight: 14
+    patterns:
+      - "since (?:19|20)\\d{2}"
+      - "established (?:in )?(?:19|20)\\d{2}"
+      - "serving .{0,30} for (?:over )?\\d+ years"
+      - "\\d+ years (?:of )?(?:experience|in business)"
+      - "family (?:owned|run)"
+      - "locally owned"
+
+  - id: takes_payments
+    category: fit
+    weight: 10
+    patterns:
+      - "shopify"
+      - "woocommerce"
+      - "squarespace commerce"
+      - "stripe"
+      - "square(?:up)?\\.com"
+      - "add to cart"
+      - "checkout"
+      - "we accept (?:all major )?(?:credit )?cards"
+
+  - id: multi_location
+    category: fit
+    weight: 12
+    patterns:
+      - "our locations"
+      - "all locations"
+      - "find a location"
+      - "\\d+ locations"
+      - "visit (?:any of )?our"
+
+  - id: has_staff
+    category: fit
+    weight: 10
+    patterns:
+      - "our team"
+      - "meet the team"
+      - "our staff"
+      - "our technicians"
+      - "our crew"
+      - "employees"
+
+  # Healthcare payers. Medicare/Medicaid certification and insurance panels
+  # mean steady reimbursement income — and receivables a lender can finance.
+  - id: insurance_payers
+    category: fit
+    weight: 12
+    patterns:
+      - "medicare.certified"
+      - "medicaid.(?:approved|certified|waiver)"
+      - "we accept (?:most |all major )?(?:medicare|medicaid|insurance)"
+      - "accept(?:ing)? most (?:major )?insurance"
+      - "in.network with"
+      - "waiver program"
+      - "community healthchoices"
+
+  - id: target_vertical
+    category: fit
+    weight: 16
+    patterns:
+      - "plumbing"
+      - "hvac"
+      - "roofing"
+      - "landscaping"
+      - "electrical contractor"
+      - "general contractor"
+      - "auto repair"
+      - "body shop"
+      - "restaurant"
+      - "bakery"
+      - "brewery"
+      - "salon"
+      - "spa"
+      - "gym"
+      - "fitness studio"
+      - "dental"
+      - "veterinar"
+      - "child care"
+      - "daycare"
+      - "landscap"
+      - "trucking"
+      - "logistics"
+      - "manufacturing"
+      - "machine shop"
+      - "print shop"
+      - "dry clean"
+      - "car wash"
+      - "convenience store"
+      - "liquor store"
+      - "garden center"
+
+  - id: b2b_services
+    category: fit
+    weight: 8
+    patterns:
+      - "request a quote"
+      - "free estimate"
+      - "schedule (?:an? )?(?:appointment|service|consultation)"
+      - "financing available"
+      - "commercial (?:and|&) residential"
+
+  # ---------------------------------------------------------------------
+  # DISQUALIFY — not a small-business lending prospect. Any hit zeroes the
+  # total but the row is still written, with the reason, so rules stay tunable.
+  # ---------------------------------------------------------------------
+
+  - id: publicly_traded
+    category: disqualify
+    weight: 100
+    patterns:
+      - "investor relations"
+      - "nasdaq:"
+      - "nyse:"
+      - "sec filings"
+      - "annual report to shareholders"
+      - "our shareholders"
+      - "form 10-k"
+
+  # Financial institutions are the single most damaging false positive: a bank
+  # scored as a prospect wastes a call and discredits the whole list. These
+  # patterns therefore lean broad, and cover the retail-banking vocabulary that
+  # actually appears on such sites, not just lending language.
+  # Only wording a lender uses about itself. Everyday mentions of banking
+  # disqualified 38 real leads in October 2026, none of them lenders: "Health
+  # Savings Account" in job benefits, a board member's credit union, "open an
+  # account" with a supplier, "the SBA loan was soon repaid" in a company's
+  # history. Leads come from the NPI registry and US DOT, so a real lender is
+  # rare; when one appears, its site carries the regulators' notices below.
+  - id: is_lender
+    category: disqualify
+    weight: 100
+    patterns:
+      - "member fdic"
+      - "equal housing lender"
+      - "(?:federally )?insured by (?:the )?ncua"
+      - "nmls\\s*(?:#|id|no\\.?|number)?\\s*[:#]?\\s*\\d"
+      - "we are an? (?:bank|lender|direct lender|credit union|mortgage lender)"
+      - "(?:we|our bank) offers? (?:small )?business loans"
+      - "we lend (?:money|to (?:small )?businesses)"
+      - "merchant cash advances?"
+      - "annual percentage yield"
+
+  - id: nonprofit
+    category: disqualify
+    weight: 100
+    patterns:
+      - "501\\(c\\)\\(3\\)"
+      - "non.?profit organization"
+      - "tax.deductible donation"
+      - "our mission is to serve"
+      - "charitable organization"
+
+  - id: enterprise_scale
+    category: disqualify
+    weight: 100
+    patterns:
+      - "fortune 500"
+      - "global headquarters"
+      - "offices worldwide"
+      - "\\d{2},\\d{3} employees"
+      - "our global team"
+
+  - id: directory_site
+    category: disqualify
+    weight: 100
+    patterns:
+      - "browse businesses"
+      - "add your business"
+      - "claim this listing"
+      - "business directory"
+      - "compare quotes from"
