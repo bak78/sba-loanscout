@@ -133,6 +133,7 @@ weights:
   contacts_own_email: 8      # the email carries the contact person's name
   company_domain: 4          # the email is on the business's own domain
   sba_certified: 6           # 8(a), women-owned, HUBZone or veteran-owned certification
+  own_website: 4             # its website loads, on its email's domain (or a franchise brand's)
   google_listing: 10         # a Google listing confirmed as this business
   reviews_many: 14           # 50+ Google ratings: a busy, established business
   reviews_some: 7            # 10-49 Google ratings

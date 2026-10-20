@@ -164,14 +164,14 @@ def is_role_address(email: str) -> bool:
 # billing, records requests, the press. A loan offer sent there is lost,
 # where info@ or office@ at a small business still reaches someone who passes it on.
 _WRONG_DEPARTMENT = re.compile(
-    r"(?:hr|humanresources|jobs?|careers?|recruit\w*|resumes?|hiring|employment|payroll|"
+    r"(?:hr|humanresources|jobs?|careers?|recruit\w*|resumes?|hiring|employment|payroll|credentialing|"
     r"\w*billing|medicalrecords\w*|records|privacy|compliance|abuse|techsupport|webmaster|"
     r"media|press|partnerships|publicaffairs|publicrelations|patientrelations|store\d+)"
 )
 
 
 def is_wrong_department(email: str) -> bool:
-    """True for hr@, careers@, billing@, medical.records@ and the like."""
+    """True for hr@, careers@, billing@, credentialing@ and the like."""
     local = email.rpartition("@")[0].lower()
     words = re.split(r"[._+-]", local)
     return any(_WRONG_DEPARTMENT.fullmatch(w) for w in (words[0], "".join(words)))

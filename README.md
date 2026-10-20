@@ -78,7 +78,10 @@ Before any lookup (free):
 - **Email fails the check** — badly shaped, a placeholder, a misspelled
   domain (gmial.com), a Gmail name too short to exist, or a domain that
   doesn't take mail.
-- **Department inbox** — hr@, careers@, billing@… won't reach the owner.
+- **Department inbox** — hr@, careers@, billing@, credentialing@… won't reach the owner.
+- **Chain or group** — one email domain used by 3 or more businesses: one
+  company's many nursing homes or branches (credentialing@chs-corp.com on 18
+  of them). Email providers and franchise brands never count.
 - **Email already used** — listed in an earlier batch (see *Memory* below).
 - **Same email or same contact twice** — one owner's several companies; the
   best-ranked one is kept.
@@ -89,12 +92,18 @@ Before any lookup (free):
 
 After the Google lookup:
 
-- **No matching Google listing** — Google shows nothing for it, or only
-  another business at that address. Often home-based, closed, or a mailing
-  address.
+- **No matching Google listing, and no website of its own** — Google shows
+  nothing for it (or only another business at that address), and it has no
+  website that loads on its email's domain. Often closed, or a mailing address.
+
+  A business that isn't on Google but whose **own website loads** (on the same
+  domain as its email, or a franchise brand's page such as a Home Instead
+  office) is **kept**: often a telehealth or home-based practice. Its
+  `google_match` column says *not on Google; own website*, and it scores a
+  little lower than one with Google reviews.
 - **Disqualified by its website** — a nonprofit, a lender, a public company.
-- **Chains and groups** — a website or email domain shared by 3 or more
-  businesses in the results (franchises, listed in `franchise_domains`, stay).
+- **Chains and groups** — a website domain shared by 3 or more businesses
+  in the results (franchises, listed in `franchise_domains`, stay).
 
 ## Memory
 

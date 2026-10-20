@@ -220,3 +220,71 @@ def test_zip_codes_need_a_state(workdir):
 def test_groups_on_the_command_line_mean_all_their_industries():
     names = cli.fields_from(None, ["construction"])
     assert "Roofing" in names and len(names) == 8
+
+
+# --- chains, credentialing inboxes, and businesses not on Google ------------------------------
+
+
+def test_one_companys_many_businesses_are_a_chain_before_any_lookup(workdir):
+    homes = [rec(uei=f"N{i}", email=f"admin{i}@chs-corp.com", contact_person=f"PAT LEE{chr(65 + i)}",
+                 website=f"www.home{i}.com") for i in range(3)]
+    places = StubPlaces()
+    cli.run_leads(cli.RunOptions(**OPTIONS), sba_client=FakeClient(homes + _records(1)), places=places)
+    assert places.lookups == 1, "no credits spent on the chain"
+    reasons = [r["left_out_reason"] for r in _rows(workdir / "out/leads_left_out.csv")]
+    assert reasons == ["chain or group: chs-corp.com is shared by 3 businesses"] * 3
+
+
+def test_a_credentialing_inbox_is_a_department_inbox():
+    from sba_loanscout.contacts import is_wrong_department
+
+    assert is_wrong_department("credentialing@chs-corp.com")
+
+
+def _crawl_of(url):
+    from sba_loanscout.crawl import SiteCrawl
+    from sba_loanscout.extract import build_page
+
+    crawl = SiteCrawl(domain="", start_url=url)
+    crawl.pages = [build_page(url, "<p>Welcome to our practice.</p>")]
+    return crawl
+
+
+@pytest.mark.parametrize("email, website, kept", [
+    ("arielle@mindsetqualityllc.com", "https://mindsetqualityllc.com", True),   # own site, own domain
+    ("tyler@thomaspointcap.com", "https://www.homeinstead.com/131", True),      # a franchise owner's page
+    ("jane@gmail.com", "https://janesclinic.com", False),                       # site doesn't match the email
+    ("jane@janesclinic.com", "", False),                                        # no website at all
+])
+def test_not_on_google_but_its_own_website_loads(workdir, monkeypatch, email, website, kept):
+    monkeypatch.setattr(leads, "crawl_site", lambda url, *a, **k: _crawl_of(url))
+    record = rec(uei="W1", email=email, website=website)
+    cli.run_leads(cli.RunOptions(**OPTIONS), sba_client=FakeClient([record]),
+                  places=StubPlaces(Listing(note="no listings found")))
+    results = _rows(workdir / "out/leads.csv") if (workdir / "out/leads.csv").exists() else []
+    if kept:
+        [row] = results
+        assert row["google_match"] == "not on Google; own website"
+        assert "own_website" in row["top_signals"]
+    else:
+        assert results == []
+        [left] = _rows(workdir / "out/leads_left_out.csv")
+        assert left["left_out_reason"].startswith("no matching Google listing")
+
+
+def test_a_franchise_brands_page_counts_even_when_the_brand_turns_programs_away(rules, srules, monkeypatch):
+    from sba_loanscout.crawl import SiteCrawl
+
+    monkeypatch.setattr(leads, "crawl_site", lambda url, *a, **k: SiteCrawl(domain="", start_url=url))
+    b = business(srules, email="tyler@thomaspointcap.com", website="https://www.homeinstead.com/131")
+    lead = leads.build_lead(b, StubPlaces(Listing(note="no listings found")), object(), rules, srules, 8, TODAY)
+    assert lead.confirmed_by_website
+
+
+def test_a_website_that_wont_load_confirms_nothing(rules, srules, monkeypatch):
+    from sba_loanscout.crawl import SiteCrawl
+
+    monkeypatch.setattr(leads, "crawl_site", lambda url, *a, **k: SiteCrawl(domain="", start_url=url))
+    b = business(srules, email="kim@renewedbh.org", website="renewedbh.org")
+    lead = leads.build_lead(b, StubPlaces(Listing(note="no listings found")), object(), rules, srules, 8, TODAY)
+    assert not lead.confirmed_by_website

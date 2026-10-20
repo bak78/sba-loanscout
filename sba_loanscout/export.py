@@ -131,7 +131,7 @@ def build_row(lead: Lead, rules: Rules) -> dict:
         "evidence_3": evidence[2],
         "google_listing": " — ".join(p for p in (listing.name, listing.address) if p),
         "google_category": listing.category,
-        "google_match": listing.matched_on,
+        "google_match": listing.matched_on or ("not on Google; own website" if lead.confirmed_by_website else ""),
         "other_phones": " | ".join(contacts.other_phones) if contacts else "",
         "pages_crawled": crawl.pages_crawled if crawl is not None else 0,
         "notes": " | ".join(notes),

@@ -39,6 +39,10 @@ class Lead:
     crawl: SiteCrawl | None
     score: Score
     email_is_contacts_own: bool = False
+    # No Google listing, but its own website loads (on its email's domain, or
+    # a franchise brand's site): real, just not on Google Maps — often a
+    # telehealth or home-based practice.
+    confirmed_by_website: bool = False
 
 
 def _hit(signal_id: str, weight: float, snippet: str, source: str, category: str = "fit") -> SignalHit:
@@ -129,6 +133,21 @@ def disqualify_hits(b: Business, website: str, rules: SbaRules) -> list[SignalHi
     return hits
 
 
+def website_is_theirs(b: Business, website: str, crawl: SiteCrawl | None, rules: SbaRules) -> str:
+    """The website's domain when it's the business's own: it loaded and is on
+    the email's domain, or it's a franchise brand's page for this owner (a
+    Home Instead office) — brand sites often turn programs away, so those
+    needn't load. Else ''."""
+    domain = registered_domain(website) if website else ""
+    if not domain:
+        return ""
+    if domain in rules.franchise_domains:
+        return domain
+    if crawl is not None and crawl.pages and domain == own_domain(b):
+        return domain
+    return ""
+
+
 def build_lead(
     b: Business,
     places: PlacesClient | None,
@@ -160,7 +179,12 @@ def build_lead(
         crawl = crawl_site(website, fetcher, rules, max_pages)
 
     site_hits = match_site(crawl.pages, rules) if crawl is not None and crawl.pages else []
+    own_site = website_is_theirs(b, website, crawl, sba_rules) if places is not None else ""
     hits = (sba_hits(b, sba_rules, today) + google_hits(listing, sba_rules)
             + disqualify_hits(b, listing.website, sba_rules) + site_hits)
+    if own_site:
+        hits.append(_hit("own_website", sba_rules.weights.get("own_website", 4),
+                         f"Its website {own_site} loads and matches its email", website))
     return Lead(b, listing, crawl, score_site(hits, rules),
-                email_belongs_to(b.email, b.contact_first, b.contact_last))
+                email_is_contacts_own=email_belongs_to(b.email, b.contact_first, b.contact_last),
+                confirmed_by_website=bool(own_site) and not listing.matched_on)

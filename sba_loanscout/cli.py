@@ -18,7 +18,7 @@ import logging
 import sys
 import threading
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
@@ -78,6 +78,7 @@ class RunSummary:
     written: int = 0
     disqualified: int = 0
     no_listing: int = 0
+    website_only: int = 0
     retry_later: int = 0
     chains: int = 0
     with_phone: int = 0
@@ -114,6 +115,8 @@ class RunSummary:
             log.info("%-34s %d", "  left out: disqualified", self.disqualified)
         if self.no_listing:
             log.info("%-34s %d", "  left out: no Google listing", self.no_listing)
+        if self.website_only:
+            log.info("%-34s %d", "  kept: own website, not on Google", self.website_only)
         log.info("%-34s %d", "  with the contact's own email", self.contacts_own)
         log.info("%-34s %d", "  with a phone number", self.with_phone)
         log.info("%-34s %d", "  with a website", self.with_website)
@@ -246,7 +249,7 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
                             if lead.score.disqualified:
                                 why = f"disqualified: {lead.score.disqualify_reason}"
                                 summary.disqualified += 1
-                            elif not lead.listing.matched_on:
+                            elif not lead.listing.matched_on and not lead.confirmed_by_website:
                                 why = f"no matching Google listing ({lead.listing.note})"
                                 summary.no_listing += 1
                             else:
@@ -289,6 +292,7 @@ def screen(ranked, rules, srules, max_pages, checker: EmailChecker, summary: Run
     [(business, reason)]); a business whose email domain couldn't be checked
     is in neither, and is tried again next run."""
     problems = check_emails([b.email for b in ranked], checker, stop)
+    chains = shared_domains(ranked, rules, srules)
     kept, left = [], []
     emails: dict[str, str] = {}
     people: dict[tuple, str] = {}
@@ -300,6 +304,9 @@ def screen(ranked, rules, srules, max_pages, checker: EmailChecker, summary: Run
             continue
         if lead.score.disqualified:
             label, reason = lead.score.disqualify_reason, f"disqualified: {lead.score.disqualify_reason}"
+        elif domain_of(b.email) in chains:
+            label = "chain or group"
+            reason = f"chain or group: {domain_of(b.email)} is shared by {chains[domain_of(b.email)]} businesses"
         elif problems.get(b.email):
             label, reason = "email fails the check", f"email fails the check: {problems[b.email]}"
         elif is_wrong_department(b.email):
@@ -319,6 +326,22 @@ def screen(ranked, rules, srules, max_pages, checker: EmailChecker, summary: Run
         summary.left_before_lookup[label] += 1
     log.info("%d pass every free check; %d left out before any lookup", len(kept), len(left))
     return kept, left
+
+
+def shared_domains(ranked, rules, srules) -> dict[str, int]:
+    """{email domain: businesses using it} for domains shared by
+    chain_min_companies or more different businesses — one company's many
+    nursing homes or branches (credentialing@chs-corp.com on 17 of them).
+    Email providers, franchise brands and the like never count."""
+    if srules.chain_min_companies < 2:
+        return {}
+    never = never_a_chain(srules.franchise_domains, rules.domain_blocklist)
+    keys = defaultdict(set)
+    for b in ranked:
+        domain = domain_of(b.email)
+        if domain and domain not in never:
+            keys[domain].add(b.key)
+    return {d: len(k) for d, k in keys.items() if len(k) >= srules.chain_min_companies}
 
 
 def check_emails(emails: list[str], checker: EmailChecker, stop: threading.Event) -> dict[str, str]:
@@ -386,6 +409,8 @@ def _tally(summary: RunSummary, row: dict, lead) -> None:
         summary.with_website += 1
     if lead.email_is_contacts_own:
         summary.contacts_own += 1
+    if lead.confirmed_by_website:
+        summary.website_only += 1
 
 
 def _preview(kept, left, options, limit, rules, srules, summary) -> int:
