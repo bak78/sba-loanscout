@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass
 from datetime import date
 
+from .churchlaw import church_or_law
 from .config import Rules
 from .contacts import is_role_address
 from .crawl import SiteCrawl, crawl_site, is_crawlable, registered_domain
@@ -130,6 +131,10 @@ def disqualify_hits(b: Business, website: str, rules: SbaRules) -> list[SignalHi
     if chain:
         hits.append(_hit("national_chain", 0, f"{chain[0]} is a national chain (national_chains in sba.yaml)",
                          website or SBA_SOURCE, "disqualify"))
+    signal_id, why = church_or_law((b.legal_name, b.dba), domains)
+    if signal_id:
+        hits.append(_hit(signal_id, 0, f"Churches and law firms are never leads — {why}",
+                         SBA_SOURCE, "disqualify"))
     return hits
 
 

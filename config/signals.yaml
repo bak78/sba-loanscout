@@ -455,6 +455,29 @@ signals:
       - "our mission is to serve"
       - "charitable organization"
 
+  # Churches and law firms are never leads (the boss's rule, October 2026).
+  # Their names and email domains are caught before any website is read;
+  # these catch the ones whose website shows it.
+  - id: church
+    category: disqualify
+    weight: 100
+    # Not "worship services" alone: assisted living and home care sites offer
+    # rides to Sunday service and weekly worship for their residents.
+    patterns:
+      - "join us (?:this sunday |on sunday |for sunday )?(?:for )?worship"
+      - "(?:welcome to|join|visit|about|give to|support) our church"
+      - "our (?:senior |lead )?pastor\\b"
+      - "(?:listen to|watch|past|recent) sermons"
+
+  - id: law_firm
+    category: disqualify
+    weight: 100
+    patterns:
+      - "(?:our|a|the) law (?:firm|office)"
+      - "attorneys? at law"
+      - "our (?:attorneys|lawyers)"
+      - "(?:personal injury|family law|criminal defense|estate planning) (?:attorneys?|lawyers?|law firm)"
+
   - id: enterprise_scale
     category: disqualify
     weight: 100

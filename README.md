@@ -89,6 +89,12 @@ Before any lookup (free):
   `.org` addresses in the list belong to for-profit companies).
 - **Government or school email** (.gov, .edu, .mil), and **national chains**
   (the `national_chains` list in `sba.yaml`).
+- **Churches and law firms** — never leads. Caught by name (Grace Baptist
+  Church, Church of God, New Hope Ministries, Law Offices of…, Attorneys at
+  Law, Esq.), by an email or website domain like `smithlaw.com`, or by website
+  wording ("join us for worship", "our pastor", "attorneys at law"). A business
+  merely named after a church (Church Organs Inc, a contractor called Church
+  Brothers Paving) stays.
 
 After the Google lookup:
 
