@@ -177,6 +177,21 @@ def is_wrong_department(email: str) -> bool:
     return any(_WRONG_DEPARTMENT.fullmatch(w) for w in (words[0], "".join(words)))
 
 
+# Inboxes that belong to a front office. Someone reads them, so the lead stays,
+# but its notes say so: the owner may never see a loan offer sent there.
+_FRONT_OFFICE = re.compile(
+    r"(?:intake|admissions?|frontdesk|reception\w*|scheduling|appointments?|referrals?|patient\w*|"
+    r"orders?|customerservice|compounding?|sales)"
+)
+
+
+def may_not_reach_owner(email: str) -> bool:
+    """True for intake@, frontdesk@, scheduling@ and the like."""
+    local = email.rpartition("@")[0].lower()
+    words = re.split(r"[._+-]", local)
+    return any(_FRONT_OFFICE.fullmatch(w) for w in (words[0], "".join(words)))
+
+
 def _rank(found: dict[str, list[str]], prefer) -> list[tuple[str, str]]:
     """Order values best-first; returns (value, first page it appeared on).
 

@@ -124,3 +124,50 @@ def test_ordinary_timeout_is_not_permanent():
     from sba_loanscout.fetch import _is_dns_failure
 
     assert not _is_dns_failure(TimeoutError("slow"))
+
+
+# --- where a site really is -------------------------------------------------
+
+
+def _answering(final_url, html):
+    from sba_loanscout.fetch import FetchResult
+
+    class StubFetcher:
+        def __init__(self):
+            self.asked = []
+
+        def get(self, url):
+            self.asked.append(url)
+            return FetchResult(final_url if len(self.asked) == 1 else url, 200, html)
+
+    return StubFetcher()
+
+
+def test_a_redirect_makes_the_site_the_domain_that_answered(rules):
+    fetcher = _answering("https://newname.com/home",
+                         '<html><body><a href="/careers">Jobs</a><p>Welcome to our practice.</p></body></html>')
+    crawl = crawl_site("https://oldname.com/", fetcher, rules, max_pages=3)
+    assert crawl.domain == "newname.com"
+    assert "https://newname.com/careers" in fetcher.asked, "its links are followed from where it landed"
+
+
+@pytest.mark.parametrize("final_url, html", [
+    ("https://oldname.com/", "<html><title>oldname.com</title><body>This domain is for sale!</body></html>"),
+    ("https://oldname.com/", "<html><body>Buy this domain today.</body></html>"),
+    ("https://oldname.com/", "<html><body>This domain has expired. Renew it now.</body></html>"),
+    ("https://www.hugedomains.com/domain_profile.cfm?d=oldname.com", "<html><body>Great name.</body></html>"),
+])
+def test_a_parked_domain_is_not_a_website(rules, final_url, html):
+    crawl = crawl_site("https://oldname.com/", _answering(final_url, html), rules)
+    assert crawl.pages == [] and crawl.permanently_failed
+
+
+def test_a_real_sites_long_page_can_mention_expired_domains(rules):
+    html = "<html><body>" + "<p>We help clients whose domain has expired.</p>" * 200 + "</body></html>"
+    crawl = crawl_site("https://oldname.com/", _answering("https://oldname.com/", html), rules)
+    assert crawl.pages and not crawl.permanently_failed
+
+
+def test_a_redirect_to_a_platform_is_not_a_business_site(rules):
+    crawl = crawl_site("https://oldname.com/", _answering("https://www.facebook.com/oldname", "<html><body>Hi</body></html>"), rules)
+    assert crawl.pages == [] and crawl.permanently_failed

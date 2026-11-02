@@ -16,10 +16,11 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import requests
@@ -34,6 +35,12 @@ SBA_SITE = "https://search.certifications.sba.gov"
 SEARCH_URL = f"{SBA_SITE}/_api/v2/search"
 NAICS_URL = f"{SBA_SITE}/naicsJson.json"
 TIMEOUT = 300  # a whole industry nationwide is one large answer
+# "Busy, try again": the SBA search answers these now and then. The pauses
+# between the three tries, in seconds.
+RETRY_STATUSES = {500, 502, 503, 504}
+RETRY_WAITS = (30, 60)
+# Saved answers are only used on the day they were asked; these are days kept.
+KEEP_ANSWERS_DAYS = 7
 NAICS_MAX_AGE_DAYS = 30
 
 STATE_NAMES = {
@@ -106,6 +113,7 @@ class SbaRules:
     chain_min_companies: int = 3
     franchise_domains: tuple[str, ...] = ()
     national_chains: tuple[str, ...] = ()
+    sent_list: str = ""
 
     @property
     def fields(self) -> tuple[Field, ...]:
@@ -163,6 +171,7 @@ def load_sba_rules(path: Path | str = DEFAULT_SBA_PATH) -> SbaRules:
         chain_min_companies=int(raw.get("chain_min_companies", 3)),
         franchise_domains=tuple(str(d).strip().lower() for d in raw.get("franchise_domains") or []),
         national_chains=tuple(str(d).strip().lower() for d in raw.get("national_chains") or []),
+        sent_list=str(raw.get("sent_list") or "").strip(),
     )
     for name in rules.default_fields:
         rules.field_named(name)  # a typo in default_fields stops here, with the list
@@ -348,12 +357,16 @@ class SbaClient:
         if self.stop.is_set():
             raise SearchStopped()
         if self._asked and self.pause:
-            end = time.monotonic() + self.pause
-            while time.monotonic() < end:
-                if self.stop.is_set():
-                    raise SearchStopped()
-                time.sleep(0.1)
+            self._sleep(self.pause)
         self._asked = True
+
+    def _sleep(self, seconds: float) -> None:
+        """Wait, noticing Stop."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if self.stop.is_set():
+                raise SearchStopped()
+            time.sleep(0.1)
 
     def naics_codes(self) -> list[str]:
         """Every 6-digit industry code the SBA knows, from its own list."""
@@ -391,10 +404,7 @@ class SbaClient:
         if path and path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
         self._wait_turn()
-        try:
-            response = self.session.post(SEARCH_URL, json=_search_body(codes), timeout=TIMEOUT)
-        except requests.RequestException as exc:
-            raise SbaUnavailable(f"couldn't reach the SBA search ({exc})") from exc
+        response = self._post_with_retries(codes)
         if response.status_code != 200:
             raise SbaUnavailable(f"the SBA search answered {response.status_code}; try again later")
         try:
@@ -405,7 +415,35 @@ class SbaClient:
         if path:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(results), encoding="utf-8")
+            self._clear_old_answers(today or date.today())
         return results
+
+    def _post_with_retries(self, codes: list[str]) -> requests.Response:
+        """One search, tried again when the SBA is busy or out of reach, so one
+        bad moment doesn't end a whole run."""
+        for wait in (*RETRY_WAITS, None):
+            try:
+                response = self.session.post(SEARCH_URL, json=_search_body(codes), timeout=TIMEOUT)
+                if response.status_code not in RETRY_STATUSES:
+                    return response
+                problem = f"the SBA search answered {response.status_code}"
+            except requests.RequestException as exc:
+                problem = f"couldn't reach the SBA search ({exc})"
+            if wait is None:
+                raise SbaUnavailable(f"{problem}; try again later")
+            log.warning("%s; trying again in %d seconds", problem, wait)
+            self._sleep(wait)
+
+    def _clear_old_answers(self, today: date) -> None:
+        """Whole days of saved answers add up, and only today's are ever used."""
+        oldest = today - timedelta(days=KEEP_ANSWERS_DAYS)
+        for folder in self.cache_dir.iterdir():
+            try:
+                old = date.fromisoformat(folder.name) < oldest
+            except ValueError:
+                continue  # the industry-code list, and anything else that isn't a day
+            if old and folder.is_dir():
+                shutil.rmtree(folder, ignore_errors=True)
 
 
 def find_businesses(client: SbaClient, rules: SbaRules, state: str, zip_prefixes, field_names) -> tuple[list[Business], dict[str, int]]:

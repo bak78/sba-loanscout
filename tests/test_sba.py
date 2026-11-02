@@ -2,8 +2,10 @@
 filter, and the SBA client's saved answers. The SBA is never really asked."""
 
 import json
+import threading
 
 import pytest
+import requests
 
 from sba_loanscout.config import ConfigError
 from sba_loanscout.sba import (ALL_STATES, SbaClient, find_businesses, load_sba_rules, parse_business,
@@ -186,6 +188,76 @@ def test_a_refusal_is_reported_plainly(tmp_path):
     from sba_loanscout.sba import SbaUnavailable
 
     session = FakeSession()
-    session.post = lambda url, json, timeout: FakeResponse({}, 500)
+    session.post = lambda url, json, timeout: FakeResponse({}, 403)
+    with pytest.raises(SbaUnavailable, match="403"):
+        SbaClient(cache_dir=None, pause=0, session=session).search(["621610"])
+
+
+def _no_waiting(monkeypatch):
+    from sba_loanscout import sba
+
+    monkeypatch.setattr(sba, "RETRY_WAITS", (0, 0))
+
+
+def test_a_busy_sba_is_asked_again(monkeypatch):
+    _no_waiting(monkeypatch)
+    session = FakeSession()
+    answers = [FakeResponse({}, 504), FakeResponse({}, 500), FakeResponse({"results": [rec()]})]
+    session.post = lambda url, json, timeout: answers.pop(0)
+    assert len(SbaClient(cache_dir=None, pause=0, session=session).search(["621610"])) == 1
+    assert not answers
+
+
+def test_a_lost_connection_is_asked_about_again(monkeypatch):
+    _no_waiting(monkeypatch)
+    answers = [requests.ConnectionError("gone"), FakeResponse({"results": [rec()]})]
+
+    def post(url, json, timeout):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    session = FakeSession()
+    session.post = post
+    assert len(SbaClient(cache_dir=None, pause=0, session=session).search(["621610"])) == 1
+
+
+def test_three_busy_answers_are_reported_plainly(monkeypatch):
+    from sba_loanscout.sba import SbaUnavailable
+
+    _no_waiting(monkeypatch)
+    calls = []
+    session = FakeSession()
+    session.post = lambda url, json, timeout: calls.append(1) or FakeResponse({}, 500)
     with pytest.raises(SbaUnavailable, match="500"):
         SbaClient(cache_dir=None, pause=0, session=session).search(["621610"])
+    assert len(calls) == 3
+
+
+def test_stop_ends_the_wait_for_a_busy_sba():
+    from sba_loanscout.sba import SearchStopped
+
+    stop = threading.Event()
+    session = FakeSession()
+
+    def post(url, json, timeout):
+        stop.set()
+        return FakeResponse({}, 503)
+
+    session.post = post
+    with pytest.raises(SearchStopped):
+        SbaClient(cache_dir=None, pause=0, session=session, stop=stop).search(["621610"])
+
+
+def test_old_days_answers_are_cleared_and_nothing_else(tmp_path):
+    from datetime import date
+
+    for name in ("2026-10-01", "2026-10-28", "not-a-day"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "answer.json").write_text("[]")
+    (tmp_path / "naics.json").write_text("[]")
+    client = SbaClient(cache_dir=tmp_path, pause=0, session=FakeSession())
+    client.search(["621610"], today=date(2026, 11, 2))
+    left = {p.name for p in tmp_path.iterdir()}
+    assert left == {"2026-10-28", "2026-11-02", "not-a-day", "naics.json"}

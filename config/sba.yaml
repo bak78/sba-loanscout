@@ -80,6 +80,11 @@ groups:
 # single industries. Put a name containing a comma in quotes.
 default_fields: [Healthcare]
 
+# The master list of every email sent, from any LoanScout, one per line (a tab
+# and anything after it is ignored). Emails on it are never listed again. A path
+# from this folder, or a full one. Delete the value to turn this off.
+sent_list: ../loanscout_sent/sent_emails.txt
+
 # Chains and groups: at the end of every run, a website or email domain shared
 # by this many different businesses in the results moves them to
 # <results>_left_out.csv. 0 turns this off.
@@ -122,6 +127,8 @@ national_chains: [
   lehighhanson.com, installedbuildingproducts.com, topbuild.com, trugreen.com, brightview.com,
   terminix.com, orkin.com, comcast.com, verizon.com, att.com, quantaservices.com, mastec.com,
   dycomind.com, emcorgroup.com, comfortsystemsusa.com,
+  novanthealth.org, atriumhealth.org, prismahealth.org, meritushealth.com, sampsonrmc.org,
+  cityblock.com, montenido.com,
 ]
 
 # Score weights for SBA and Google facts. They join the website signals in

@@ -126,6 +126,8 @@ class EmailChecker:
             return "domain doesn't exist"
         except dns.resolver.NoAnswer:
             return "domain takes no email (no mail server)"
+        except (dns.exception.SyntaxError, dns.exception.FormError):
+            return "not a valid address"  # a domain DNS can't even ask about, like one with a 64-letter part
         except (dns.resolver.NoNameservers, dns.exception.Timeout) as exc:
             raise EmailCheckUnavailable(f"couldn't check {domain}: {type(exc).__name__}") from exc
         # A "null MX" (a single record pointing at ".") says: we take no mail.

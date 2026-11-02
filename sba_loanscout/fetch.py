@@ -238,7 +238,9 @@ class PoliteFetcher:
                     )
 
                 body = self._read_capped(response)
-                return FetchResult(url, 200, body)
+                # Where it landed, not where it was asked: after a redirect
+                # the page belongs to the domain that answered.
+                return FetchResult(response.url or url, 200, body)
 
             except requests.RequestException as exc:
                 if _is_dns_failure(exc):

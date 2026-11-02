@@ -46,6 +46,16 @@ class Lead:
     confirmed_by_website: bool = False
 
 
+class SiteUnreachable(ConnectionError):
+    """No Google listing, and its own website didn't answer just now (a timeout,
+    a busy server, our own internet). Its website could still prove it's real,
+    so this isn't a verdict yet. The lead is what it scored without the site."""
+
+    def __init__(self, lead: Lead, error: str):
+        super().__init__(f"its website didn't answer ({error})")
+        self.lead = lead
+
+
 def _hit(signal_id: str, weight: float, snippet: str, source: str, category: str = "fit") -> SignalHit:
     return SignalHit(signal_id=signal_id, category=category, weight=float(weight),
                      snippet=snippet, source_url=source, page_type="registry")
@@ -148,7 +158,7 @@ def website_is_theirs(b: Business, website: str, crawl: SiteCrawl | None, rules:
         return ""
     if domain in rules.franchise_domains:
         return domain
-    if crawl is not None and crawl.pages and domain == own_domain(b):
+    if crawl is not None and crawl.pages and crawl.domain == own_domain(b):
         return domain
     return ""
 
@@ -166,7 +176,8 @@ def build_lead(
 
     Pass places=None for a free preview: SBA facts only, no lookups.
     Raises SerperUnavailable (stop the run) or ConnectionError (retry this
-    business next run) from the lookup.
+    business next run) from the lookup, and SiteUnreachable when only its own
+    website, for now silent, could keep it.
     """
     if places is None:
         listing = Listing(note="preview: not looked up")
@@ -190,6 +201,11 @@ def build_lead(
     if own_site:
         hits.append(_hit("own_website", sba_rules.weights.get("own_website", 4),
                          f"Its website {own_site} loads and matches its email", website))
-    return Lead(b, listing, crawl, score_site(hits, rules),
+    lead = Lead(b, listing, crawl, score_site(hits, rules),
                 email_is_contacts_own=email_belongs_to(b.email, b.contact_first, b.contact_last),
                 confirmed_by_website=bool(own_site) and not listing.matched_on)
+    if (places is not None and crawl is not None and not crawl.pages and not crawl.permanently_failed
+            and not listing.matched_on and not lead.confirmed_by_website and not lead.score.disqualified
+            and registered_domain(website) == own_domain(b)):
+        raise SiteUnreachable(lead, crawl.errors[0] if crawl.errors else "no answer")
+    return lead

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Rules
-from .contacts import _format_phone
+from .contacts import _format_phone, may_not_reach_owner
 from .leads import Lead
 
 COLUMNS = [
@@ -91,6 +91,8 @@ def build_row(lead: Lead, rules: Rules) -> dict:
     evidence += [""] * (3 - len(evidence))
 
     notes = [listing.note] if listing.note else []
+    if may_not_reach_owner(b.email):
+        notes.insert(0, f"inbox may not reach the owner ({b.email.partition('@')[0]}@)")
     if crawl is not None:
         notes += crawl.errors[:2]
 
@@ -160,13 +162,20 @@ class CsvWriter:
                 if line.strip()
             }
 
+        # Businesses already given their one extra try at a website that
+        # didn't answer; another try costs a Serper credit.
+        self.retried_path = self.path.with_name(f"{self.path.stem}.retried.txt")
+        self.retried = seen_keys(self.path, ".retried.txt") if resume and track_seen else set()
+        if not resume and track_seen:
+            self.retried_path.unlink(missing_ok=True)
+
         if resume and self.path.exists():
             _upgrade_columns(self.path)
 
         write_header = not self.path.exists() or not resume
         mode = "w" if write_header else "a"
 
-        self._file = self.path.open(mode, newline="", encoding="utf-8")
+        self._file = self.path.open(mode, newline="", encoding="utf-8-sig")
         self._writer = csv.DictWriter(self._file, fieldnames=COLUMNS)
         if write_header:
             self._writer.writeheader()
@@ -206,6 +215,17 @@ class CsvWriter:
                 self._seen_file.flush()
             self.seen.add(key)
 
+    def retry_once(self, key: str) -> bool:
+        """True the first time a business asks to be tried again next run; False
+        once it has had that try, so one dead website can't cost a credit every run."""
+        with self._lock:
+            if key in self.retried:
+                return False
+            self.retried.add(key)
+            with self.retried_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"{key}\n")
+            return True
+
     def already_done(self, key: str) -> bool:
         return key in self.seen
 
@@ -221,6 +241,16 @@ class CsvWriter:
 
     def __exit__(self, *exc_info) -> None:
         self.close()
+
+
+def seen_keys(results: Path | str, suffix: str = ".seen.txt") -> set[str]:
+    """The keys in a results file's memory; empty when there is none yet."""
+    results = Path(results)
+    try:
+        lines = results.with_name(f"{results.stem}{suffix}").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return set()
+    return {line.strip() for line in lines if line.strip()}
 
 
 def emails_path(results: Path | str) -> Path:
@@ -246,13 +276,13 @@ def remembered_emails(results: Path | str) -> dict[str, str]:
 def _upgrade_columns(path: Path) -> None:
     """Rewrite a CSV from an older version with the current columns, so
     appended rows don't land under the wrong headings."""
-    with path.open(newline="", encoding="utf-8") as handle:
+    with path.open(newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None or reader.fieldnames == COLUMNS:
             return
         rows = list(reader)
 
-    with path.open("w", newline="", encoding="utf-8") as handle:
+    with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=COLUMNS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
@@ -264,12 +294,12 @@ def sort_csv_by_score(path: Path | str) -> None:
     if not path.exists():
         return
 
-    with path.open(newline="", encoding="utf-8") as handle:
+    with path.open(newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
 
     rows.sort(key=lambda r: float(r.get("score") or 0), reverse=True)
 
-    with path.open("w", newline="", encoding="utf-8") as handle:
+    with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=COLUMNS)
         writer.writeheader()
         writer.writerows(rows)

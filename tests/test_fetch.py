@@ -46,6 +46,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif self.path == "/notfound":
             self.send_error(404)
+        elif self.path == "/moved":
+            self.send_response(302)
+            self.send_header("Location", "/landed")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         elif self.path == "/image":
             self._send(200, "image/png", b"\x89PNG")
         else:
@@ -86,6 +91,12 @@ def test_fetches_html_successfully(server, fetcher):
     result = fetcher.get(f"{base}/")
     assert result.ok
     assert "hello" in result.html
+
+
+def test_a_redirect_reports_where_it_landed(server, fetcher):
+    base, _ = server
+    result = fetcher.get(f"{base}/moved")
+    assert result.ok and result.url == f"{base}/landed"
 
 
 def test_robots_disallow_is_honored(server, fetcher):

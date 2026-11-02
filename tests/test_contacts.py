@@ -168,3 +168,15 @@ def test_contact_page_gets_a_slot_on_a_crowded_site(rules):
 
     assert len(calls) == 4, "the budget is unchanged"
     assert calls[1] == "https://shop.com/contact", "contact is fetched first"
+
+
+@pytest.mark.parametrize("email, flagged", [
+    ("intake@x.com", True), ("frontdesk@x.com", True), ("front.desk@x.com", True), ("scheduling@x.com", True),
+    ("appointments@x.com", True), ("admissions@x.com", True), ("customerservice@x.com", True),
+    ("patientcare@x.com", True), ("sales@x.com", True),
+    ("info@x.com", False), ("office@x.com", False), ("jane@x.com", False), ("jorders@x.com", False),
+])
+def test_front_office_inboxes(email, flagged):
+    from sba_loanscout.contacts import may_not_reach_owner
+
+    assert may_not_reach_owner(email) is flagged

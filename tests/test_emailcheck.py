@@ -93,3 +93,9 @@ def test_a_gmail_address_too_short_to_exist_fails():
     assert checker.problem("j.o.e@gmail.com") != ""
     assert checker.problem("joesmith@gmail.com") == ""
     assert checker.problem("j.smith+leads@gmail.com") == ""
+
+
+def test_a_domain_dns_cant_ask_about_fails_instead_of_crashing():
+    from sba_loanscout.emailcheck import EmailChecker
+
+    assert EmailChecker().problem("jane@" + "a" * 64 + ".com") == "not a valid address"

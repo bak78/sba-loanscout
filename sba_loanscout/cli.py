@@ -23,13 +23,13 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
 from .cleanup import LeftOutWriter, leave_out_chains, left_out_path, never_a_chain
-from .config import ConfigError, load_settings
+from .config import PROJECT_ROOT, ConfigError, load_settings
 from .contacts import is_wrong_department
 from .crawl import DEFAULT_MAX_PAGES
 from .emailcheck import EmailChecker, EmailCheckUnavailable, domain_of
-from .export import COLUMNS, CsvWriter, build_row, remembered_emails, sort_csv_by_score
+from .export import COLUMNS, CsvWriter, build_row, remembered_emails, seen_keys, sort_csv_by_score
 from .fetch import PoliteFetcher
-from .leads import build_lead
+from .leads import SiteUnreachable, build_lead
 from .places import PlacesClient, SerperUnavailable
 from .sba import (ALL_STATES, SbaClient, SbaUnavailable, SearchStopped, check_state, check_zip_prefixes,
                   find_businesses, load_sba_rules)
@@ -47,6 +47,7 @@ EXIT_INTERRUPTED = 130
 DEFAULT_OUT = "out/sba_leads.csv"
 EMAIL_CHECK_WORKERS = 32
 UNREACHABLE = "couldn't check the domain (try again later)"
+FILE_IN_USE = "%s is open in another program (Excel?). Close it and run again; rows already written are saved."
 
 
 @dataclass
@@ -188,15 +189,20 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
     )
 
     checker = EmailChecker()
-    used = {} if options.dry_run or options.no_resume else emails_in(options.out)
+    used = {} if options.no_resume else emails_in(options.out)
+    sent = sent_emails(srules.sent_list)
     try:
-        kept, left = screen(ranked, rules, srules, options.max_pages, checker, summary, stop, used)
+        kept, left = screen(ranked, rules, srules, options.max_pages, checker, summary, stop, used, sent)
     except SearchStopped:
         log.warning("stopped while checking emails — nothing was written")
         return EXIT_INTERRUPTED
 
     if options.dry_run:
-        return _preview(kept, left, options, limit, rules, srules, summary)
+        try:
+            return _preview(kept, left, options, limit, rules, srules, summary)
+        except PermissionError as exc:
+            log.error(FILE_IN_USE, exc.filename)
+            return EXIT_CONFIG_ERROR
 
     places = places or PlacesClient(api_key)
     fetcher = PoliteFetcher(settings.user_agent, default_delay=options.delay)
@@ -217,6 +223,8 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
                 pending = pending[:limit]
             if not pending:
                 log.info("nothing new — every matching business is already done")
+                writer.close()  # so the tidying can rewrite the file
+                _tidy(options.out, srules, rules, summary)
                 summary.report(options.out)
                 return EXIT_DEPLETED
 
@@ -240,6 +248,12 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
                                 log.error("%s — stopping; finished rows are saved", exc)
                                 summary.serper_unavailable = True
                                 raise
+                            except SiteUnreachable as exc:
+                                if writer.retry_once(b.key):
+                                    summary.retry_later += 1
+                                    log.warning("%s: %s; will try once more next run", b.company_name, exc)
+                                    continue
+                                lead = exc.lead
                             except Exception as exc:  # one bad business must not kill the run
                                 summary.retry_later += 1
                                 log.warning("%s: failed, will retry next run (%s)", b.company_name, exc)
@@ -265,29 +279,32 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
                             _tally(summary, row, lead)
                             log.info("%-36.36s %-22.22s score=%-5s %s", b.company_name,
                                      f"{b.contact_first} {b.contact_last}", row["score"], b.email)
-                except (KeyboardInterrupt, SerperUnavailable):
+                except (KeyboardInterrupt, SerperUnavailable, PermissionError):
                     fetcher.stop()
                     pool.shutdown(wait=False, cancel_futures=True)
                     raise
     except KeyboardInterrupt:
         log.warning("stopped — %d rows already written to %s (run again to continue)",
                     summary.written, options.out)
+        _tidy(options.out, srules, rules, summary)
         return EXIT_INTERRUPTED
     except SerperUnavailable:
         pass
+    except PermissionError as exc:
+        log.error(FILE_IN_USE, exc.filename)
+        return EXIT_CONFIG_ERROR
     finally:
         summary.credits_used = getattr(places, "lookups", 0)
         fetcher.close()
         places.close()
 
-    summary.chains = _leave_out_chains(options.out, srules, rules)
-    sort_csv_by_score(options.out)
+    _tidy(options.out, srules, rules, summary)
     summary.report(options.out)
     return summary.outcome()
 
 
 def screen(ranked, rules, srules, max_pages, checker: EmailChecker, summary: RunSummary,
-           stop: threading.Event, used: dict[str, str]):
+           stop: threading.Event, used: dict[str, str], sent=frozenset()):
     """Free checks before any lookup, best-ranked first. Returns (kept,
     [(business, reason)]); a business whose email domain couldn't be checked
     is in neither, and is tried again next run."""
@@ -311,6 +328,8 @@ def screen(ranked, rules, srules, max_pages, checker: EmailChecker, summary: Run
             label, reason = "email fails the check", f"email fails the check: {problems[b.email]}"
         elif is_wrong_department(b.email):
             label, reason = "department inbox", f"department inbox: {b.email} won't reach the owner"
+        elif b.email in sent:
+            label, reason = "already sent", f"{b.email} is on the sent list"
         elif used.get(b.email, b.key) != b.key:
             label, reason = "email already used", f"{b.email} already used for another lead"
         elif b.email in emails:
@@ -382,13 +401,40 @@ def emails_in(path: str) -> dict[str, str]:
     earlier batch whose results file has since been deleted."""
     used = remembered_emails(path)
     try:
-        with open(path, newline="", encoding="utf-8") as handle:
+        with open(path, newline="", encoding="utf-8-sig") as handle:
             for row in csv.DictReader(handle):
                 if row.get("email"):
                     used.setdefault(row["email"].strip().lower(), row.get("key", ""))
     except (OSError, KeyError):
         pass
     return used
+
+
+def sent_emails(sent_list: str) -> set[str]:
+    """Every email on the master sent list (sent_list in sba.yaml; a path from
+    the project folder, one email per line, anything after a tab ignored)."""
+    if not sent_list:
+        return set()
+    path = PROJECT_ROOT / sent_list
+    try:
+        lines = path.read_text(encoding="utf-8-sig", errors="ignore").splitlines()
+    except OSError:
+        log.warning("sent list not found at %s: emails sent from other programs won't be caught", path)
+        return set()
+    found = {line.partition("\t")[0].strip().lower() for line in lines}
+    found = {email for email in found if "@" in email}
+    log.info("sent list: %d emails won't be listed again", len(found))
+    return found
+
+
+def _tidy(out: str, srules, rules, summary: RunSummary) -> None:
+    """Chains out of the results, best first. A file open in Excel can't be
+    rewritten; every row is already saved, so this says so and goes on."""
+    try:
+        summary.chains = _leave_out_chains(out, srules, rules)
+        sort_csv_by_score(out)
+    except PermissionError as exc:
+        log.warning("couldn't sort the results or remove chains: " + FILE_IN_USE, exc.filename)
 
 
 def _leave_out_chains(out: str, srules, rules) -> int:
@@ -414,8 +460,13 @@ def _tally(summary: RunSummary, row: dict, lead) -> None:
 
 
 def _preview(kept, left, options, limit, rules, srules, summary) -> int:
-    """Score from SBA facts alone, into a separate file. Nothing is marked
-    done, so a real run afterwards still processes every business."""
+    """Score from SBA facts alone, into a separate file. Businesses a real run
+    has already done are skipped; nothing new is marked done, so a real run
+    afterwards still processes everything shown here."""
+    done = set() if options.no_resume else seen_keys(options.out)
+    summary.already_done = sum(1 for b in kept if b.key in done)
+    kept = [b for b in kept if b.key not in done]
+    left = [(b, reason) for b, reason in left if b.key not in done]
     out = preview_path(options.out)
     left_out_path(out).unlink(missing_ok=True)  # the preview starts over each time
     left_out = LeftOutWriter(out, COLUMNS)
@@ -429,8 +480,7 @@ def _preview(kept, left, options, limit, rules, srules, summary) -> int:
         for b, reason in left:
             left_out.write(build_row(build_lead(b, None, None, rules, srules, options.max_pages), rules), reason)
 
-    summary.chains = _leave_out_chains(out, srules, rules)
-    sort_csv_by_score(out)
+    _tidy(out, srules, rules, summary)
     next_run = min(limit, len(kept)) if limit > 0 else len(kept)
     log.info("preview only — no Google lookups made. The next real run would look up the "
              "top %d (about %d credits).", next_run, next_run)

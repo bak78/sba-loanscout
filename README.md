@@ -82,7 +82,8 @@ Before any lookup (free):
 - **Chain or group** — one email domain used by 3 or more businesses: one
   company's many nursing homes or branches (credentialing@chs-corp.com on 18
   of them). Email providers and franchise brands never count.
-- **Email already used** — listed in an earlier batch (see *Memory* below).
+- **Email already used** — listed in an earlier batch, or on the master sent
+  list (see *Memory* below).
 - **Same email or same contact twice** — one owner's several companies; the
   best-ranked one is kept.
 - **Nonprofit** — the SBA record says so (a `.org` email alone doesn't: most
@@ -106,7 +107,11 @@ After the Google lookup:
   domain as its email, or a franchise brand's page such as a Home Instead
   office) is **kept**: often a telehealth or home-based practice. Its
   `google_match` column says *not on Google; own website*, and it scores a
-  little lower than one with Google reviews.
+  little lower than one with Google reviews. A website that redirects to another
+  domain, or a domain that's parked or for sale, doesn't count as its own.
+
+  If its own website simply didn't answer, that may pass, so it's looked up once
+  more on the next run (about one more credit) before being left out.
 - **Disqualified by its website** — a nonprofit, a lender, a public company.
 - **Chains and groups** — a website domain shared by 3 or more businesses
   in the results (franchises, listed in `franchise_domains`, stay).
@@ -122,6 +127,16 @@ no one is emailed twice:
 
 To start a fresh batch for your boss, **delete only `sba_leads.csv`**. Keep the
 two `.txt` files.
+
+`sent_list` in `config\sba.yaml` also points at the master list of everything
+sent from any LoanScout (`..\loanscout_sent\sent_emails.txt` by default). Emails
+on it are left out before any credit is spent. If the file isn't there, the run
+says so and carries on, so keep that folder next to this one on each computer.
+
+Preview follows the same memory: it shows only what a real run would still do.
+
+If the results are open in Excel when a run ends, the rows are safe but can't be
+sorted or have chains removed. The log says so; close the file and run again.
 
 ## Industries
 

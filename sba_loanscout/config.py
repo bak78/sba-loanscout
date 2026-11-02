@@ -49,9 +49,6 @@ class Rules:
     domain_blocklist: frozenset[str]
     tld_blocklist: frozenset[str]
 
-    def by_category(self, category: str) -> tuple[Signal, ...]:
-        return tuple(s for s in self.signals if s.category == category)
-
     def page_type(self, url: str) -> str:
         """Classify a URL into a page type; 'other' when nothing matches."""
         lowered = url.lower()

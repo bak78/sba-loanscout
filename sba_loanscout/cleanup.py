@@ -63,10 +63,16 @@ class LeftOutWriter:
         self.path = left_out_path(results)
         self.columns = ["left_out_reason"] + list(columns)
 
+    def check_writable(self) -> None:
+        """Raises PermissionError while the file is open in Excel."""
+        if self.path.exists():
+            with self.path.open("a", encoding="utf-8-sig"):
+                pass
+
     def write(self, row: dict, reason: str) -> None:
         new = not self.path.exists()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", newline="", encoding="utf-8") as handle:
+        with self.path.open("a", newline="", encoding="utf-8-sig") as handle:
             writer = csv.DictWriter(handle, fieldnames=self.columns, extrasaction="ignore")
             if new:
                 writer.writeheader()
@@ -99,7 +105,7 @@ def leave_out_chains(results: Path | str, columns: list[str], min_companies: int
     results = Path(results)
     if min_companies < 2 or not results.exists():
         return {}
-    with results.open(newline="", encoding="utf-8") as handle:
+    with results.open(newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
 
     companies: dict[str, set[str]] = defaultdict(set)
@@ -110,18 +116,23 @@ def leave_out_chains(results: Path | str, columns: list[str], min_companies: int
     if not chains:
         return {}
 
-    kept, moved = [], defaultdict(int)
-    left_out = LeftOutWriter(results, columns)
+    kept, leaving, moved = [], [], defaultdict(int)
     for row in rows:
         hit = sorted(d for d in row_domains(row, never) if d in chains)
         if hit:
-            left_out.write(row, f"chain or group: {hit[0]} is shared by {chains[hit[0]]} companies")
+            leaving.append((row, f"chain or group: {hit[0]} is shared by {chains[hit[0]]} companies"))
             moved[hit[0]] += 1
         else:
             kept.append(row)
 
-    with results.open("w", newline="", encoding="utf-8") as handle:
+    # Either file may be open in Excel. Finding that out before anything moves
+    # keeps a row from ending up in both files, or in neither.
+    left_out = LeftOutWriter(results, columns)
+    left_out.check_writable()
+    with results.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(kept)
+    for row, reason in leaving:
+        left_out.write(row, reason)
     return dict(moved)

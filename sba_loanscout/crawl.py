@@ -8,6 +8,7 @@ live — so links are ranked by page type before anything is fetched.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -28,6 +29,20 @@ SITE_TIME_BUDGET = 60.0
 # of its pages would most likely fail the same slow way.
 MAX_CONSECUTIVE_FAILURES = 2
 
+# A domain being sold or parked proves nothing about the business that once
+# used it; it usually means that business has closed or moved on.
+PARKING_HOSTS = {
+    "hugedomains.com", "sedo.com", "sedoparking.com", "dan.com", "afternic.com", "bodis.com",
+    "parkingcrew.net", "uniregistry.com", "domainmarket.com", "buydomains.com", "undeveloped.com",
+}
+_PARKED = re.compile(
+    r"this domain (?:name )?(?:is|may be) for sale|buy this domain|domain (?:name )?(?:is )?parked|"
+    r"domain (?:name )?(?:has )?expired|parked free",
+    re.IGNORECASE,
+)
+# Parked pages are short; a real site's long page mentioning these words isn't one.
+PARKED_PAGE_MAX_CHARS = 3000
+
 
 @dataclass
 class SiteCrawl:
@@ -46,25 +61,8 @@ class SiteCrawl:
         return len(self.pages)
 
     @property
-    def business_name(self) -> str:
-        """Best guess at the business name, from the homepage title."""
-        if not self.pages:
-            return ""
-        title = self.pages[0].title
-        # Titles are usually "Name — Tagline" or "Name | Tagline".
-        for separator in ("|", "—", "–", " - ", "::"):
-            if separator in title:
-                return title.split(separator)[0].strip()
-        return title.strip()
-
-    @property
     def contacts(self) -> SiteContacts:
         return summarize([(p.url, p.contacts) for p in self.pages], self.domain)
-
-    def thin_content(self, rules: Rules) -> bool:
-        """True when the site yielded too little text to score reliably."""
-        total = sum(len(p.text) for p in self.pages)
-        return total < rules.thin_content_chars
 
 
 def _top_domain(extracted) -> str:
@@ -123,6 +121,13 @@ def prioritize(links: list[str], base_domain: str, rules: Rules) -> list[str]:
     return [link for _, link in ranked]
 
 
+def is_parked(page: Page, domain: str) -> bool:
+    """True for a domain-for-sale or parking page rather than a business's site."""
+    if domain in PARKING_HOSTS:
+        return True
+    return len(page.text) <= PARKED_PAGE_MAX_CHARS and _PARKED.search(page.searchable) is not None
+
+
 def crawl_site(
     start_url: str,
     fetcher: PoliteFetcher,
@@ -144,12 +149,19 @@ def crawl_site(
         crawl.permanently_failed = getattr(home, "permanent", False)
         return crawl
 
-    crawl.pages.append(build_page(home.url, home.html, rules.page_type(home.url)))
+    # A redirect decides whose site this really is.
+    domain = crawl.domain = registered_domain(home.url) or domain
+    page = build_page(home.url, home.html, rules.page_type(home.url))
+    if is_parked(page, domain) or not is_crawlable(home.url, rules):
+        crawl.errors.append(f"{start_url}: leads to {domain}, parked, for sale or not a business site")
+        crawl.permanently_failed = True
+        return crawl
+    crawl.pages.append(page)
 
     if max_pages <= 1:
         return crawl
 
-    candidates = prioritize(extract_links(home.html, start_url), domain, rules)
+    candidates = prioritize(extract_links(home.html, home.url), domain, rules)
 
     to_fetch = candidates[: max_pages - 1]
 

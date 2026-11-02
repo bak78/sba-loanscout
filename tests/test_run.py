@@ -121,11 +121,12 @@ def workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SERPER_API_KEY", "test-key")
     monkeypatch.setattr(cli, "EmailChecker", StubChecker)
+    monkeypatch.setattr(cli, "sent_emails", lambda path: set())  # never the real sent list
     return tmp_path
 
 
 def _rows(path):
-    with open(path, newline="", encoding="utf-8") as handle:
+    with open(path, newline="", encoding="utf-8-sig") as handle:
         return list(csv.DictReader(handle))
 
 
@@ -242,10 +243,10 @@ def test_a_credentialing_inbox_is_a_department_inbox():
 
 
 def _crawl_of(url):
-    from sba_loanscout.crawl import SiteCrawl
+    from sba_loanscout.crawl import SiteCrawl, registered_domain
     from sba_loanscout.extract import build_page
 
-    crawl = SiteCrawl(domain="", start_url=url)
+    crawl = SiteCrawl(domain=registered_domain(url), start_url=url)
     crawl.pages = [build_page(url, "<p>Welcome to our practice.</p>")]
     return crawl
 
@@ -284,7 +285,187 @@ def test_a_franchise_brands_page_counts_even_when_the_brand_turns_programs_away(
 def test_a_website_that_wont_load_confirms_nothing(rules, srules, monkeypatch):
     from sba_loanscout.crawl import SiteCrawl
 
-    monkeypatch.setattr(leads, "crawl_site", lambda url, *a, **k: SiteCrawl(domain="", start_url=url))
+    gone = SiteCrawl(domain="renewedbh.org", start_url="https://renewedbh.org", permanently_failed=True)
+    monkeypatch.setattr(leads, "crawl_site", lambda url, *a, **k: gone)
     b = business(srules, email="kim@renewedbh.org", website="renewedbh.org")
     lead = leads.build_lead(b, StubPlaces(Listing(note="no listings found")), object(), rules, srules, 8, TODAY)
     assert not lead.confirmed_by_website
+
+
+def _silent_site(url, *args, **kwargs):
+    from sba_loanscout.crawl import SiteCrawl
+
+    return SiteCrawl(domain="renewedbh.org", start_url=url, errors=[f"{url}: ConnectionError"])
+
+
+def test_a_website_that_didnt_answer_isnt_a_verdict_yet(rules, srules, monkeypatch):
+    monkeypatch.setattr(leads, "crawl_site", _silent_site)
+    b = business(srules, email="kim@renewedbh.org", website="renewedbh.org")
+    with pytest.raises(leads.SiteUnreachable) as caught:
+        leads.build_lead(b, StubPlaces(Listing(note="no listings found")), object(), rules, srules, 8, TODAY)
+    assert not caught.value.lead.confirmed_by_website
+
+
+def test_a_silent_website_doesnt_matter_when_google_confirms_the_business(rules, srules, monkeypatch):
+    monkeypatch.setattr(leads, "crawl_site", _silent_site)
+    b = business(srules, email="kim@renewedbh.org", website="renewedbh.org")
+    lead = leads.build_lead(b, StubPlaces(), object(), rules, srules, 8, TODAY)
+    assert lead.listing.matched_on
+
+
+def test_a_silent_website_gets_one_more_lookup_then_is_left_out(workdir, monkeypatch):
+    monkeypatch.setattr(leads, "crawl_site", _silent_site)
+    places = StubPlaces(Listing(note="no listings found"))
+    record = rec(uei="W1", email="kim@renewedbh.org", website="renewedbh.org")
+    run = lambda: cli.run_leads(cli.RunOptions(**OPTIONS), sba_client=FakeClient([record]), places=places)
+
+    run()
+    assert places.lookups == 1 and not (workdir / "out/leads_left_out.csv").exists(), "not a verdict yet"
+    run()
+    assert places.lookups == 2
+    [left] = _rows(workdir / "out/leads_left_out.csv")
+    assert left["left_out_reason"].startswith("no matching Google listing")
+    assert run() == cli.EXIT_DEPLETED and places.lookups == 2, "a dead website can't cost a credit every run"
+
+
+def test_a_redirect_to_another_domain_isnt_its_own_website(rules, srules, monkeypatch):
+    from sba_loanscout.crawl import SiteCrawl
+    from sba_loanscout.extract import build_page
+
+    def elsewhere(url, *args, **kwargs):
+        crawl = SiteCrawl(domain="someoneelse.com", start_url=url)
+        crawl.pages = [build_page("https://someoneelse.com/", "<p>Welcome.</p>")]
+        return crawl
+
+    monkeypatch.setattr(leads, "crawl_site", elsewhere)
+    b = business(srules, email="kim@renewedbh.org", website="renewedbh.org")
+    lead = leads.build_lead(b, StubPlaces(Listing(note="no listings found")), object(), rules, srules, 8, TODAY)
+    assert not lead.confirmed_by_website
+
+
+# --- the sent list, Preview's memory, and tidying -------------------------------------------------
+
+
+def test_the_sent_list_is_left_out_before_any_lookup(workdir, monkeypatch):
+    monkeypatch.setattr(cli, "sent_emails", lambda path: {"owner0@gmail.com"})
+    places = StubPlaces()
+    cli.run_leads(cli.RunOptions(**OPTIONS), sba_client=FakeClient(_records(2)), places=places)
+    assert places.lookups == 1
+    [left] = _rows(workdir / "out/leads_left_out.csv")
+    assert left["email"] == "owner0@gmail.com" and "sent list" in left["left_out_reason"]
+
+
+def test_the_sent_list_file_is_read_and_a_missing_one_is_said_out_loud(tmp_path, caplog):
+    sent = tmp_path / "sent.txt"
+    sent.write_bytes("\ufeffJane@Acme.com\tsba-10-20\r\nbob@acme.com\r\n\r\nnot an email\r\n".encode("utf-8"))
+    assert cli.sent_emails(str(sent)) == {"jane@acme.com", "bob@acme.com"}
+    assert cli.sent_emails("") == set()
+    assert cli.sent_emails(str(tmp_path / "gone.txt")) == set()
+    assert "sent list not found" in caplog.text
+
+
+def test_preview_shows_only_what_a_real_run_would_still_do(workdir):
+    places = StubPlaces()
+    assert cli.run_leads(cli.RunOptions(limit=2, **OPTIONS), sba_client=FakeClient(_records(3)), places=places) == cli.EXIT_OK
+    preview = cli.RunOptions(dry_run=True, **OPTIONS)
+    assert cli.run_leads(preview, sba_client=FakeClient(_records(3)), places=places) == cli.EXIT_OK
+    assert len(_rows(workdir / "out/leads_preview.csv")) == 1
+    assert len(_rows(workdir / "out/leads.csv")) == 2, "a preview changes nothing"
+
+
+def test_stop_still_sorts_the_results(workdir, monkeypatch):
+    stop = threading.Event()
+    tidied = []
+    monkeypatch.setattr(cli, "_tidy", lambda out, *a: tidied.append(out))
+
+    class StopsAfterOne(StubPlaces):
+        def find(self, *args, **kwargs):
+            stop.set()
+            return super().find(*args, **kwargs)
+
+    code = cli.run_leads(cli.RunOptions(**OPTIONS), stop, sba_client=FakeClient(_records(3)), places=StopsAfterOne())
+    assert code == cli.EXIT_INTERRUPTED and tidied == ["out/leads.csv"]
+
+
+def test_results_open_in_excel_at_the_end_of_a_run_lose_nothing(workdir, monkeypatch, caplog):
+    def locked(path):
+        raise PermissionError(13, "in use", str(path))
+
+    monkeypatch.setattr(cli, "sort_csv_by_score", locked)
+    code = cli.run_leads(cli.RunOptions(**OPTIONS), sba_client=FakeClient(_records(2)), places=StubPlaces())
+    assert code == cli.EXIT_OK and len(_rows(workdir / "out/leads.csv")) == 2
+    assert "open in another program" in caplog.text
+
+
+def test_results_open_in_excel_before_a_run_spend_nothing(workdir, monkeypatch, caplog):
+    def locked(*args, **kwargs):
+        raise PermissionError(13, "in use", "out/leads.csv")
+
+    monkeypatch.setattr(cli, "CsvWriter", locked)
+    places = StubPlaces()
+    code = cli.run_leads(cli.RunOptions(**OPTIONS), sba_client=FakeClient(_records(2)), places=places)
+    assert code == cli.EXIT_CONFIG_ERROR and places.lookups == 0
+    assert "open in another program" in caplog.text
+
+
+def test_a_preview_open_in_excel_says_so(workdir, monkeypatch, caplog):
+    def locked(*args, **kwargs):
+        raise PermissionError(13, "in use", "out/leads_preview.csv")
+
+    monkeypatch.setattr(cli, "CsvWriter", locked)
+    code = cli.run_leads(cli.RunOptions(dry_run=True, **OPTIONS), sba_client=FakeClient(_records(2)), places=StubPlaces())
+    assert code == cli.EXIT_CONFIG_ERROR and "open in another program" in caplog.text
+
+
+def test_a_left_out_file_open_in_excel_moves_no_chain_rows(tmp_path, monkeypatch):
+    from sba_loanscout.cleanup import LeftOutWriter, leave_out_chains
+
+    results = tmp_path / "leads.csv"
+    with results.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["key", "email"])
+        writer.writeheader()
+        writer.writerows({"key": str(i), "email": f"a{i}@chain.com"} for i in range(3))
+
+    def locked(self):
+        raise PermissionError(13, "in use", str(self.path))
+
+    monkeypatch.setattr(LeftOutWriter, "check_writable", locked)
+    with pytest.raises(PermissionError):
+        leave_out_chains(results, ["key", "email"], 3, set())
+    assert len(_rows(results)) == 3 and not (tmp_path / "leads_left_out.csv").exists()
+
+
+def test_excel_is_told_the_file_is_utf8_exactly_once(tmp_path):
+    from sba_loanscout.cleanup import LeftOutWriter
+    from sba_loanscout.export import CsvWriter, sort_csv_by_score
+
+    path = tmp_path / "leads.csv"
+    row = dict.fromkeys(COLUMNS, "") | {"key": "K1", "email": "a@b.com", "company_name": "José’s Café", "score": "1"}
+    for _ in range(2):  # the second time appends to the file
+        with CsvWriter(path) as writer:
+            writer.write(row)
+    assert path.read_bytes().count(b"\xef\xbb\xbf") == 1 and path.read_bytes().startswith(b"\xef\xbb\xbf")
+    sort_csv_by_score(path)
+    assert path.read_bytes().count(b"\xef\xbb\xbf") == 1
+    assert _rows(path)[0]["company_name"] == "José’s Café" and len(_rows(path)) == 2
+
+    left = LeftOutWriter(path, ["email"])
+    left.write({"email": "a@b.com"}, "why")
+    left.write({"email": "c@d.com"}, "why")
+    assert left.path.read_bytes().count(b"\xef\xbb\xbf") == 1
+    assert list(_rows(left.path)[0]) == ["left_out_reason", "email"]
+
+
+def test_a_front_office_inbox_stays_but_the_notes_say_so(rules, srules):
+    b = business(srules, email="intake@bodysensept.com")
+    row = build_row(leads.build_lead(b, None, None, rules, srules, 8, TODAY), rules)
+    assert "inbox may not reach the owner (intake@)" in row["notes"]
+    b = business(srules, email="jane@bodysensept.com")
+    row = build_row(leads.build_lead(b, None, None, rules, srules, 8, TODAY), rules)
+    assert "inbox" not in row["notes"]
+
+
+def test_a_hospital_systems_address_is_a_national_chain(rules, srules):
+    b = business(srules, email="awright@novanthealth.org")
+    lead = leads.build_lead(b, None, None, rules, srules, 8, TODAY)
+    assert "national_chain" in lead.score.disqualify_reason
